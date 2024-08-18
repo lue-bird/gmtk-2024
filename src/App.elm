@@ -53,7 +53,7 @@ type alias Rope =
 
 ropeElasticity : Float
 ropeElasticity =
-    740
+    840
 
 
 preferredRopeSegmentLength : Quantity Float Length.Meters
@@ -97,34 +97,82 @@ initialState =
     , playerVelocity =
         Vector2d.fromMeters { x = 2, y = 20 }
             |> Vector2d.per Duration.second
-    , ropes =
-        [ { startLocation = Point2d.fromMeters { x = 5, y = 5 }
-          , startVelocity =
-                Vector2d.fromMeters { x = 0, y = 0 }
-                    |> Vector2d.per Duration.second
-          , between =
-                [ Point2d.fromMeters { x = 5.2, y = 4.5 }
-                , Point2d.fromMeters { x = 5, y = 4 }
-                , Point2d.fromMeters { x = 4.5, y = 3.7 }
-                , Point2d.fromMeters { x = 4.6, y = 3.1 }
-                , Point2d.fromMeters { x = 5.1, y = 2.8 }
-                , Point2d.fromMeters { x = 5, y = 2.3 }
-                , Point2d.fromMeters { x = 4.9, y = 1.9 }
-                ]
-                    |> List.map
-                        (\location ->
-                            { location = location
-                            , velocity =
-                                Vector2d.fromMeters { x = 0, y = 0 }
-                                    |> Vector2d.per Duration.second
-                            }
-                        )
-          , endLocation = Point2d.fromMeters { x = 5.2, y = 1.5 }
-          , endVelocity =
-                Vector2d.fromMeters { x = 0, y = 0 }
-                    |> Vector2d.per Duration.second
-          }
-        ]
+    , ropes = []
+    }
+
+
+ropeRandomGenerator : Random.Pcg.Extended.Generator Rope
+ropeRandomGenerator =
+    let
+        nodeCount : Int
+        nodeCount =
+            9
+    in
+    Random.Pcg.Extended.constant
+        (\startOffset between endOffset ->
+            { startVelocity = Vector2d.zero
+            , startLocation =
+                Point2d.fromMeters { x = 0, y = 0 }
+                    |> Point2d.translateBy endOffset
+            , between = between
+            , endVelocity = Vector2d.zero
+            , endLocation =
+                Point2d.fromMeters { x = 0, y = -(nodeCount |> Basics.toFloat) * 0.8 }
+                    |> Point2d.translateBy endOffset
+            }
+        )
+        |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+        |> Random.Pcg.Extended.andMap
+            (List.range 1 (nodeCount - 1)
+                |> List.map
+                    (\i ->
+                        Random.Pcg.Extended.constant
+                            (\offset ->
+                                { velocity = Vector2d.zero
+                                , location =
+                                    Point2d.fromMeters { x = 0, y = -(i |> Basics.toFloat) * 0.8 }
+                                        |> Point2d.translateBy offset
+                                }
+                            )
+                            |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+                    )
+                |> randomPcgExtendedListAll
+            )
+        |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+
+
+randomPcgExtendedListAll generators =
+    case generators of
+        [] ->
+            Random.Pcg.Extended.constant []
+
+        headGenerator :: tailGenerators ->
+            Random.Pcg.Extended.map2 (\head tail -> head :: tail)
+                headGenerator
+                (randomPcgExtendedListAll tailGenerators)
+
+
+ropeNodeLocationVariation =
+    Random.Pcg.Extended.constant
+        (\xOffset yOffset -> Vector2d.fromMeters { x = xOffset, y = yOffset })
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float -0.08 0.08)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float -0.05 0.05)
+
+
+ropeTranslateBy : Vector2d Length.Meters Float -> Rope -> Rope
+ropeTranslateBy offset rope =
+    { startLocation = rope.startLocation |> Point2d.translateBy offset
+    , startVelocity = rope.startVelocity
+    , between =
+        rope.between
+            |> List.map
+                (\node ->
+                    { location = node.location |> Point2d.translateBy offset
+                    , velocity = node.velocity
+                    }
+                )
+    , endLocation = rope.endLocation |> Point2d.translateBy offset
+    , endVelocity = rope.endVelocity
     }
 
 
@@ -134,16 +182,40 @@ interface =
         [ [ Web.Window.sizeRequest, Web.Window.resizeListen ]
             |> Web.interfaceBatch
             |> Web.interfaceFutureMap (\size -> { state | windowSize = size })
-        , Web.Random.unsignedInt32s 4
-            |> Web.interfaceFutureMap
-                (\initialRandomness ->
-                    case initialRandomness of
-                        [] ->
-                            state
+        , case state.randomness of
+            Just _ ->
+                Web.interfaceNone
 
-                        initialRandomnessInt0 :: initialRandomnessInt1Up ->
-                            state |> stateWithInitialRandomness ( initialRandomnessInt0, initialRandomnessInt1Up )
-                )
+            Nothing ->
+                Web.Random.unsignedInt32s 4
+                    |> Web.interfaceFutureMap
+                        (\initialRandomness ->
+                            case initialRandomness of
+                                [] ->
+                                    state
+
+                                initialRandomnessInt0 :: initialRandomnessInt1Up ->
+                                    let
+                                        initialSeed : Random.Pcg.Extended.Seed
+                                        initialSeed =
+                                            Random.Pcg.Extended.initialSeed initialRandomnessInt0 initialRandomnessInt1Up
+
+                                        ( generatedRope, newSeed ) =
+                                            Random.Pcg.Extended.step
+                                                ropeRandomGenerator
+                                                initialSeed
+                                    in
+                                    { state
+                                        | randomness =
+                                            { initial = ( initialRandomnessInt0, initialRandomnessInt1Up )
+                                            , seed = newSeed
+                                            }
+                                                |> Just
+                                        , ropes =
+                                            [ generatedRope |> ropeTranslateBy (Vector2d.fromMeters { x = 4, y = 5 })
+                                            ]
+                                    }
+                        )
         , let
             worldSize : { width : Float, height : Float }
             worldSize =
@@ -241,8 +313,8 @@ interface =
                             , y = -worldSizeCells.y / 2
                             }
                         ]
-                        [ playerUi
-                        , ropesUi
+                        [ ropesUi
+                        , playerUi
                         ]
                     ]
                 ]
@@ -357,12 +429,16 @@ interface =
                             , endVelocity = newEndVelocity
                             }
                     in
-                    { state
-                        | lastSimulationTime = Just newTime
-                        , playerLocation = newPlayerLocation
-                        , playerVelocity = newPlayerVelocity
-                        , ropes = newRopes
-                    }
+                    if newPlayerLocation |> Point2d.yCoordinate |> Quantity.lessThan (Length.meters -25) then
+                        initialState
+
+                    else
+                        { state
+                            | lastSimulationTime = Just newTime
+                            , playerLocation = newPlayerLocation
+                            , playerVelocity = newPlayerVelocity
+                            , ropes = newRopes
+                        }
                 )
         , Web.Window.listenTo "keydown"
             |> Web.interfaceFutureMap
@@ -415,32 +491,6 @@ releaseActionKeyboardKeys =
 worldSizeCells : { x : Float, y : Float }
 worldSizeCells =
     { x = 80, y = 45 }
-
-
-stateWithInitialRandomness : ( Int, List Int ) -> (State -> State)
-stateWithInitialRandomness ( initialRandomnessInt0, initialRandomnessInt1Up ) =
-    \state ->
-        let
-            initialSeed : Random.Pcg.Extended.Seed
-            initialSeed =
-                Random.Pcg.Extended.initialSeed initialRandomnessInt0 initialRandomnessInt1Up
-
-            ( generatedDockShapeCompositions, newSeed ) =
-                ( (), initialSeed )
-
-            -- Random.Pcg.Extended.step
-            --     (dockShapeGeneratorWithSubCount 60)
-            --     initialSeed
-        in
-        { state
-            | randomness =
-                { initial = ( initialRandomnessInt0, initialRandomnessInt1Up )
-                , seed = newSeed
-                }
-                    |> Just
-
-            --, dockShapeCompositions = generatedDockShapeCompositions
-        }
 
 
 listMapWithNeighbors : (Maybe a -> a -> Maybe a -> b) -> List a -> List b
