@@ -4,11 +4,13 @@ module App exposing (app)
 -}
 
 import Color
+import Direction2d
 import Duration exposing (Duration)
 import Json.Decode
 import Length
+import LineSegment2d exposing (LineSegment2d)
 import Point2d exposing (Point2d)
-import Quantity
+import Quantity exposing (Quantity)
 import Random.Pcg.Extended
 import Set exposing (Set)
 import Svg.LocalExtra
@@ -32,20 +34,97 @@ type alias State =
     , lastSimulationTime : Maybe Time.Posix
     , playerLocation : Point2d Length.Meters Float
     , playerVelocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
+    , ropes : List Rope
     }
 
 
+type alias Rope =
+    { startLocation : Point2d Length.Meters Float
+    , startVelocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
+    , between :
+        List
+            { location : Point2d Length.Meters Float
+            , velocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
+            }
+    , endLocation : Point2d Length.Meters Float
+    , endVelocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
+    }
+
+
+ropeElasticity : Float
+ropeElasticity =
+    740
+
+
+preferredRopeSegmentLength : Quantity Float Length.Meters
+preferredRopeSegmentLength =
+    Length.meters 1
+
+
+accelerationBetweenRopePoints :
+    Point2d Length.Meters Float
+    -> Point2d Length.Meters Float
+    -> Vector2d (Quantity.Rate (Quantity.Rate Length.Meters Duration.Seconds) Duration.Seconds) Float
+accelerationBetweenRopePoints start end =
+    let
+        lineSegment : LineSegment2d Length.Meters Float
+        lineSegment =
+            LineSegment2d.from start end
+    in
+    Vector2d.withLength
+        (Quantity.multiplyBy ropeElasticity
+            ((lineSegment |> LineSegment2d.length)
+                |> Quantity.minus preferredRopeSegmentLength
+            )
+        )
+        (lineSegment |> LineSegment2d.direction |> Maybe.withDefault Direction2d.positiveY)
+        |> Vector2d.per Duration.second
+        |> Vector2d.per Duration.second
+
+
 app =
-    { initialState =
-        { windowSize = { width = 1920, height = 1080 }
-        , randomness = Nothing
-        , lastSimulationTime = Nothing
-        , playerLocation = Point2d.fromMeters { x = 0, y = 0 }
-        , playerVelocity =
-            Vector2d.fromMeters { x = 2, y = 20 }
-                |> Vector2d.per Duration.second
-        }
+    { initialState = initialState
     , interface = interface
+    }
+
+
+initialState : State
+initialState =
+    { windowSize = { width = 1920, height = 1080 }
+    , randomness = Nothing
+    , lastSimulationTime = Nothing
+    , playerLocation = Point2d.fromMeters { x = 0, y = 0 }
+    , playerVelocity =
+        Vector2d.fromMeters { x = 2, y = 20 }
+            |> Vector2d.per Duration.second
+    , ropes =
+        [ { startLocation = Point2d.fromMeters { x = 5, y = 5 }
+          , startVelocity =
+                Vector2d.fromMeters { x = 0, y = 0 }
+                    |> Vector2d.per Duration.second
+          , between =
+                [ Point2d.fromMeters { x = 5.2, y = 4.5 }
+                , Point2d.fromMeters { x = 5, y = 4 }
+                , Point2d.fromMeters { x = 4.5, y = 3.7 }
+                , Point2d.fromMeters { x = 4.6, y = 3.1 }
+                , Point2d.fromMeters { x = 5.1, y = 2.8 }
+                , Point2d.fromMeters { x = 5, y = 2.3 }
+                , Point2d.fromMeters { x = 4.9, y = 1.9 }
+                ]
+                    |> List.map
+                        (\location ->
+                            { location = location
+                            , velocity =
+                                Vector2d.fromMeters { x = 0, y = 0 }
+                                    |> Vector2d.per Duration.second
+                            }
+                        )
+          , endLocation = Point2d.fromMeters { x = 5.2, y = 1.5 }
+          , endVelocity =
+                Vector2d.fromMeters { x = 0, y = 0 }
+                    |> Vector2d.per Duration.second
+          }
+        ]
     }
 
 
@@ -102,6 +181,29 @@ interface =
                     }
                     [ Svg.LocalExtra.fillUniform (Color.rgb 1 0.5 0)
                     ]
+
+            ropeUi : Rope -> Web.Dom.Node state_
+            ropeUi rope =
+                Svg.LocalExtra.polyline
+                    ((rope.startLocation
+                        :: (rope.between |> List.map .location)
+                        ++ [ rope.endLocation ]
+                     )
+                        |> List.map (\point -> point |> Point2d.toRecord Length.inMeters)
+                    )
+                    [ Svg.LocalExtra.strokeWidth 1
+                    , Svg.LocalExtra.strokeUniform (Color.rgb 0.36 0.28 0.01)
+                    , Web.Dom.style "stroke-linejoin" "round"
+                    , Web.Dom.style "stroke-linecap" "round"
+                    ]
+
+            ropesUi : Web.Dom.Node state_
+            ropesUi =
+                Web.Svg.element "g"
+                    []
+                    (state.ropes
+                        |> List.map ropeUi
+                    )
           in
           Web.Dom.element "div"
             [ Web.Dom.style "background-color" (Color.rgb 0.05 0.05 0.05 |> Color.toCssString)
@@ -139,7 +241,9 @@ interface =
                             , y = -worldSizeCells.y / 2
                             }
                         ]
-                        [ playerUi ]
+                        [ playerUi
+                        , ropesUi
+                        ]
                     ]
                 ]
             ]
@@ -161,18 +265,103 @@ interface =
                         newPlayerLocation =
                             state.playerLocation
                                 |> Point2d.translateBy
-                                    (state.playerVelocity |> Vector2d.for durationToSimulate)
+                                    (newPlayerVelocity |> Vector2d.for durationToSimulate)
 
                         newPlayerVelocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
                         newPlayerVelocity =
                             state.playerVelocity
                                 |> Vector2d.plus
                                     (gravity |> Vector2d.for durationToSimulate)
+
+                        newRopes : List Rope
+                        newRopes =
+                            state.ropes |> List.map ropeUpdate
+
+                        ropeUpdate : Rope -> Rope
+                        ropeUpdate rope =
+                            let
+                                newEndVelocity =
+                                    let
+                                        connectedLocation : Point2d Length.Meters Float
+                                        connectedLocation =
+                                            case List.reverse rope.between of
+                                                [] ->
+                                                    rope.startLocation
+
+                                                nextNode :: _ ->
+                                                    nextNode.location
+                                    in
+                                    rope.endVelocity
+                                        |> Vector2d.plus
+                                            (accelerationBetweenRopePoints rope.endLocation connectedLocation
+                                                |> Vector2d.for durationToSimulate
+                                            )
+                                        |> Vector2d.plus
+                                            (gravity |> Vector2d.for durationToSimulate)
+                                        |> Vector2d.scaleBy
+                                            (1 - (frictionPercentageEachSecond * (durationToSimulate |> Duration.inSeconds)))
+                            in
+                            { startLocation =
+                                rope.startLocation
+                            , startVelocity =
+                                rope.startVelocity
+                            , between =
+                                rope.between
+                                    |> listMapWithNeighbors
+                                        (\maybePreviousNodeInBetween node maybeNextNodeInBetween ->
+                                            let
+                                                previousConnectedLocation : Point2d Length.Meters Float
+                                                previousConnectedLocation =
+                                                    case maybePreviousNodeInBetween of
+                                                        Nothing ->
+                                                            rope.startLocation
+
+                                                        Just previousNode ->
+                                                            previousNode.location
+
+                                                nextConnectedLocation : Point2d Length.Meters Float
+                                                nextConnectedLocation =
+                                                    case maybeNextNodeInBetween of
+                                                        Nothing ->
+                                                            rope.endLocation
+
+                                                        Just nextNode ->
+                                                            nextNode.location
+
+                                                newVelocity =
+                                                    node.velocity
+                                                        |> Vector2d.plus
+                                                            (accelerationBetweenRopePoints node.location previousConnectedLocation
+                                                                |> Vector2d.for durationToSimulate
+                                                            )
+                                                        |> Vector2d.plus
+                                                            (accelerationBetweenRopePoints node.location nextConnectedLocation
+                                                                |> Vector2d.for durationToSimulate
+                                                            )
+                                                        |> Vector2d.plus
+                                                            (gravity |> Vector2d.for durationToSimulate)
+                                                        |> Vector2d.scaleBy
+                                                            (1 - (frictionPercentageEachSecond * (durationToSimulate |> Duration.inSeconds)))
+                                            in
+                                            { location =
+                                                node.location
+                                                    |> Point2d.translateBy
+                                                        (newVelocity |> Vector2d.for durationToSimulate)
+                                            , velocity = newVelocity
+                                            }
+                                        )
+                            , endLocation =
+                                rope.endLocation
+                                    |> Point2d.translateBy
+                                        (newEndVelocity |> Vector2d.for durationToSimulate)
+                            , endVelocity = newEndVelocity
+                            }
                     in
                     { state
                         | lastSimulationTime = Just newTime
                         , playerLocation = newPlayerLocation
                         , playerVelocity = newPlayerVelocity
+                        , ropes = newRopes
                     }
                 )
         , Web.Window.listenTo "keydown"
@@ -200,9 +389,15 @@ interface =
             |> Web.interfaceBatch
 
 
+frictionPercentageEachSecond : Float
+frictionPercentageEachSecond =
+    0.7
+
+
+gravity : Vector2d (Quantity.Rate (Quantity.Rate Length.Meters Duration.Seconds) Duration.Seconds) Float
 gravity =
     -- would be cool to make dynamic based on nearby rocks!
-    Vector2d.fromMeters { x = 0, y = -20 }
+    Vector2d.fromMeters { x = 0, y = -26 }
         |> Vector2d.per Duration.second
         |> Vector2d.per Duration.second
 
@@ -246,3 +441,16 @@ stateWithInitialRandomness ( initialRandomnessInt0, initialRandomnessInt1Up ) =
 
             --, dockShapeCompositions = generatedDockShapeCompositions
         }
+
+
+listMapWithNeighbors : (Maybe a -> a -> Maybe a -> b) -> List a -> List b
+listMapWithNeighbors elementWithNeighborsToNewElement list =
+    let
+        justList : List (Maybe a)
+        justList =
+            list |> List.map Just
+    in
+    List.map3 elementWithNeighborsToNewElement
+        (Nothing :: justList)
+        list
+        (List.drop 1 justList ++ [ Nothing ])
