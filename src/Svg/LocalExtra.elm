@@ -64,13 +64,13 @@ translated offset =
         )
 
 
-scaled : Float -> Web.Dom.Modifier future_
+scaled : { x : Float, y : Float } -> Web.Dom.Modifier future_
 scaled scale =
     Web.Dom.attribute "transform"
         ([ "scale("
-         , scale |> String.fromFloat
+         , scale.x |> String.fromFloat
          , ", "
-         , scale |> String.fromFloat
+         , scale.y |> String.fromFloat
          , ")"
          ]
             |> String.concat
