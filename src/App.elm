@@ -248,7 +248,8 @@ interface =
             playerUi : Web.Dom.Node state_
             playerUi =
                 Svg.LocalExtra.circle
-                    { position = state.playerLocation |> Point2d.toRecord Length.inMeters
+                    { position =
+                        state.playerLocation |> Point2d.toRecord Length.inMeters
                     , radius = 1
                     }
                     [ Svg.LocalExtra.fillUniform (Color.rgb 1 0.5 0)
@@ -313,8 +314,26 @@ interface =
                             , y = -worldSizeCells.y / 2
                             }
                         ]
-                        [ ropesUi
-                        , playerUi
+                        [ let
+                            cameraLocation : Point2d Length.Meters Float
+                            cameraLocation =
+                                -- TODO slightly behind player?
+                                -- TODO more narrow/flakes fov when fast?
+                                state.playerLocation
+                          in
+                          Web.Svg.element "g"
+                            [ Svg.LocalExtra.translated
+                                { x = -(cameraLocation |> Point2d.xCoordinate |> Length.inMeters)
+                                , y =
+                                    -(Basics.max
+                                        -1
+                                        (cameraLocation |> Point2d.yCoordinate |> Length.inMeters)
+                                     )
+                                }
+                            ]
+                            [ ropesUi
+                            , playerUi
+                            ]
                         ]
                     ]
                 ]
