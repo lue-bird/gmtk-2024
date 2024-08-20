@@ -146,6 +146,21 @@ vineAndBushesTranslateBy offset vineAndBushes =
 
 interface : State -> Web.Interface State
 interface state =
+    {- if not state.userHasInteracted then
+           Web.Dom.element "button"
+               [ Web.Dom.listenTo "click"
+               , Web.Dom.style "font-size" "50px"
+               , Web.Dom.style "font-weight" "bold"
+               , Web.Dom.style "font-family" "sans-serif"
+               , Web.Dom.style "x" "45%"
+               , Web.Dom.style "y" "50%"
+               ]
+               [ Web.Dom.text "play" ]
+               |> Web.Dom.futureMap (\_ -> { state | userHasInteracted = True })
+               |> Web.Dom.render
+
+       else
+    -}
     [ [ Web.Window.sizeRequest, Web.Window.resizeListen ]
         |> Web.interfaceBatch
         |> Web.interfaceFutureMap (\size -> { state | windowSize = size })
@@ -159,6 +174,10 @@ interface state =
                     (\loadResult ->
                         case loadResult of
                             Ok musicSource ->
+                                let
+                                    _ =
+                                        Debug.todo ""
+                                in
                                 { state | music = Just musicSource }
 
                             Err error ->
@@ -745,7 +764,7 @@ interface state =
                                                 node.location
                                                     |> Point2d.translateBy
                                                         (newVelocity |> Vector2d.for durationToSimulate)
-                                            , velocity = newVelocity
+                                            , velocity = newVelocity |> capLengthAt (Length.meters 20 |> Quantity.per Duration.second)
                                             , mass = node.mass
                                             }
                                         )
@@ -754,7 +773,7 @@ interface state =
                                     vine.end.location
                                         |> Point2d.translateBy
                                             (newEndVelocity |> Vector2d.for durationToSimulate)
-                                , velocity = newEndVelocity
+                                , velocity = newEndVelocity |> capLengthAt (Length.meters 20 |> Quantity.per Duration.second)
                                 , mass = vine.end.mass
                                 }
                             }
@@ -935,16 +954,18 @@ vineNodeAtIndexAlter vineNodeIndex vineNodeChange vines =
             (\grabbedVine ->
                 case vineNodeIndex.vineNodeIndex of
                     VineEnd ->
-                        { grabbedVine
-                            | end = grabbedVine.end |> vineNodeChange
+                        { start = grabbedVine.start
+                        , between = grabbedVine.between
+                        , end = grabbedVine.end |> vineNodeChange
                         }
 
                     VineBetweenIndex vineBetweenNodeIndex ->
-                        { grabbedVine
-                            | between =
-                                grabbedVine.between
-                                    |> listElementAtIndexAlter vineBetweenNodeIndex
-                                        vineNodeChange
+                        { start = grabbedVine.start
+                        , between =
+                            grabbedVine.between
+                                |> listElementAtIndexAlter vineBetweenNodeIndex
+                                    vineNodeChange
+                        , end = grabbedVine.end
                         }
             )
 
@@ -1061,7 +1082,16 @@ type VineNodeIndex
 
 frictionPercentageEachSecond : Float
 frictionPercentageEachSecond =
-    0.7
+    0.9
+
+
+capLengthAt maximumLength vector =
+    if vector |> Vector2d.length |> Quantity.greaterThanOrEqualTo maximumLength then
+        Vector2d.withLength maximumLength
+            (vector |> Vector2d.direction |> Maybe.withDefault Direction2d.positiveY)
+
+    else
+        vector
 
 
 vineElasticity : Float
