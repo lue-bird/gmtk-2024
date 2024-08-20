@@ -1,5 +1,6 @@
 module App exposing (app)
 
+import Angle
 import Color exposing (Color)
 import Direction2d
 import Duration exposing (Duration)
@@ -8,6 +9,7 @@ import Length
 import LineSegment2d exposing (LineSegment2d)
 import Mass
 import Point2d exposing (Point2d)
+import Polygon2d
 import Quantity exposing (Quantity)
 import Random.Pcg.Extended
 import Set exposing (Set)
@@ -32,26 +34,30 @@ type alias State =
     , lastSimulationTime : Maybe Time.Posix
     , playerLocation : Point2d Length.Meters Float
     , playerVelocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
-    , playerGrabbed : Maybe { ropeIndex : Int, ropeNodeIndex : RopeNodeIndex }
-    , ropes : List Rope
-    , bushes : List BushCircle
+    , playerGrabbed : Maybe { vineIndex : Int, vineNodeIndex : VineNodeIndex }
+    , vines : List Vine
+    , bushes : List ColoredCircle
+    , clouds : List ColoredCircle
+    , woodImperfections : List ColoredCircle
+    , hasGrabbedInThePast : Bool
     }
 
 
-type alias BushCircle =
+type alias ColoredCircle =
     { color : Color
+    , radius : Quantity Float Length.Meters
     , location : Point2d Length.Meters Float
     }
 
 
-type alias Rope =
-    { start : RopeNode
-    , between : List RopeNode
-    , end : RopeNode
+type alias Vine =
+    { start : VineNode
+    , between : List VineNode
+    , end : VineNode
     }
 
 
-type alias RopeNode =
+type alias VineNode =
     { location : Point2d Length.Meters Float
     , velocity : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
     , mass : Quantity Float Mass.Kilograms
@@ -69,13 +75,65 @@ initialState =
     { windowSize = { width = 1920, height = 1080 }
     , randomness = Nothing
     , lastSimulationTime = Nothing
-    , playerLocation = Point2d.fromMeters { x = -17, y = 0 }
+    , playerLocation = Point2d.fromMeters { x = -17, y = -2 }
     , playerVelocity =
         Vector2d.fromMeters { x = 19, y = 10 }
             |> Vector2d.per Duration.second
     , playerGrabbed = Nothing
-    , ropes = []
+    , vines = []
     , bushes = []
+    , clouds = []
+    , woodImperfections = []
+    , hasGrabbedInThePast = False
+    }
+
+
+veryLongVineRandomGenerator =
+    Random.Pcg.Extended.andThen (\nodeCount -> vineRandomGenerator nodeCount)
+        (Random.Pcg.Extended.int 31 37)
+
+
+longVineRandomGenerator =
+    Random.Pcg.Extended.andThen (\nodeCount -> vineRandomGenerator nodeCount)
+        (Random.Pcg.Extended.int 13 16)
+
+
+shortVineRandomGenerator =
+    Random.Pcg.Extended.andThen (\nodeCount -> vineRandomGenerator nodeCount)
+        (Random.Pcg.Extended.int 9 10)
+
+
+mediumVineRandomGenerator : Random.Pcg.Extended.Generator { bushes : List ColoredCircle, vine : Vine }
+mediumVineRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\vine bush ->
+            { vine = vine
+            , bushes = bush
+            }
+        )
+        |> Random.Pcg.Extended.andMap shortVineRandomGenerator
+        |> Random.Pcg.Extended.andMap bushRandomGenerator
+
+
+longVineFromBushRandomGenerator : Random.Pcg.Extended.Generator { bushes : List ColoredCircle, vine : Vine }
+longVineFromBushRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\vine bush ->
+            { vine = vine
+            , bushes = bush
+            }
+        )
+        |> Random.Pcg.Extended.andMap longVineRandomGenerator
+        |> Random.Pcg.Extended.andMap bushRandomGenerator
+
+
+vineAndBushesTranslateBy :
+    Vector2d Length.Meters Float
+    -> { vine : Vine, bushes : List ColoredCircle }
+    -> { vine : Vine, bushes : List ColoredCircle }
+vineAndBushesTranslateBy offset vineAndBushes =
+    { vine = vineAndBushes.vine |> vineTranslateBy offset
+    , bushes = vineAndBushes.bushes |> bushTranslateBy offset
     }
 
 
@@ -102,9 +160,101 @@ interface state =
                                     initialSeed =
                                         Random.Pcg.Extended.initialSeed initialRandomnessInt0 initialRandomnessInt1Up
 
-                                    ( generatedRope, newSeed ) =
+                                    ( generated, newSeed ) =
                                         Random.Pcg.Extended.step
-                                            ropeRandomGenerator
+                                            (Random.Pcg.Extended.constant
+                                                (\bottom right otherVines backgroundBushes woodImperfections cloudsLeft cloudsRight ->
+                                                    { onTree =
+                                                        (bottom |> vineAndBushesTranslateBy (Vector2d.fromMeters { x = 4, y = 5 }))
+                                                            :: (right |> vineAndBushesTranslateBy (Vector2d.fromMeters { x = 20, y = 7 }))
+                                                            :: otherVines
+                                                    , backgroundBushes = backgroundBushes |> List.concat
+                                                    , woodImperfections = woodImperfections |> List.concat
+                                                    , clouds =
+                                                        (cloudsLeft ++ cloudsRight) |> List.concat
+                                                    }
+                                                )
+                                                |> Random.Pcg.Extended.andMap mediumVineRandomGenerator
+                                                |> Random.Pcg.Extended.andMap longVineFromBushRandomGenerator
+                                                |> Random.Pcg.Extended.andMap
+                                                    (List.range 0 9
+                                                        |> List.map
+                                                            (\i ->
+                                                                Random.Pcg.Extended.constant
+                                                                    (\bush x ->
+                                                                        bush
+                                                                            |> vineAndBushesTranslateBy
+                                                                                (Vector2d.fromMeters
+                                                                                    { x = x, y = 5 + (i |> Basics.toFloat) * 10 }
+                                                                                )
+                                                                    )
+                                                                    |> Random.Pcg.Extended.andMap
+                                                                        (Random.Pcg.Extended.choices
+                                                                            mediumVineRandomGenerator
+                                                                            [ longVineFromBushRandomGenerator ]
+                                                                        )
+                                                                    |> Random.Pcg.Extended.andMap
+                                                                        (Random.Pcg.Extended.float -22 22)
+                                                            )
+                                                        |> randomPcgExtendedListAll
+                                                    )
+                                                |> Random.Pcg.Extended.andMap
+                                                    (List.range 0 9
+                                                        |> List.map
+                                                            (\i ->
+                                                                backgroundBushRandomGenerator
+                                                                    |> Random.Pcg.Extended.map
+                                                                        (bushTranslateBy
+                                                                            (Vector2d.fromMeters
+                                                                                { x = 0, y = 5 + (i |> Basics.toFloat) * 20 }
+                                                                            )
+                                                                        )
+                                                            )
+                                                        |> randomPcgExtendedListAll
+                                                    )
+                                                |> Random.Pcg.Extended.andMap
+                                                    (List.range 0 9
+                                                        |> List.map
+                                                            (\i ->
+                                                                woodImperfectionsRandomGenerator
+                                                                    |> Random.Pcg.Extended.map
+                                                                        (bushTranslateBy
+                                                                            (Vector2d.fromMeters
+                                                                                { x = 0, y = 5 + (i |> Basics.toFloat) * 20 }
+                                                                            )
+                                                                        )
+                                                            )
+                                                        |> randomPcgExtendedListAll
+                                                    )
+                                                |> Random.Pcg.Extended.andMap
+                                                    (List.range 0 13
+                                                        |> List.map
+                                                            (\i ->
+                                                                cloudRandomGenerator
+                                                                    |> Random.Pcg.Extended.map
+                                                                        (bushTranslateBy
+                                                                            (Vector2d.fromMeters
+                                                                                { x = -35, y = 12 + (i |> Basics.toFloat) * 14 }
+                                                                            )
+                                                                        )
+                                                            )
+                                                        |> randomPcgExtendedListAll
+                                                    )
+                                                |> Random.Pcg.Extended.andMap
+                                                    (List.range 0 13
+                                                        |> List.map
+                                                            (\i ->
+                                                                cloudRandomGenerator
+                                                                    |> Random.Pcg.Extended.map
+                                                                        (bushTranslateBy
+                                                                            (Vector2d.fromMeters
+                                                                                { x = 35, y = 16 + (i |> Basics.toFloat) * 14 }
+                                                                            )
+                                                                        )
+                                                            )
+                                                        |> randomPcgExtendedListAll
+                                                    )
+                                            )
                                             initialSeed
                                 in
                                 { state
@@ -113,9 +263,16 @@ interface state =
                                         , seed = newSeed
                                         }
                                             |> Just
-                                    , ropes =
-                                        [ generatedRope |> ropeTranslateBy (Vector2d.fromMeters { x = 4, y = 5 })
-                                        ]
+                                    , vines =
+                                        generated.onTree |> List.map .vine
+                                    , bushes =
+                                        generated.backgroundBushes
+                                            ++ (generated.onTree
+                                                    |> List.concatMap .bushes
+                                                    |> bushTranslateBy (Vector2d.fromMeters { x = 4, y = 5 })
+                                               )
+                                    , clouds = generated.clouds
+                                    , woodImperfections = generated.woodImperfections
                                 }
                     )
     , let
@@ -141,11 +298,39 @@ interface state =
         worldUi : Web.Dom.Node state_
         worldUi =
             Web.Svg.element "rect"
-                [ Svg.LocalExtra.fillUniform (Color.rgb 0.03 0.02 0)
+                [ Svg.LocalExtra.fillUniform (Color.rgb 0 0.3 0.7)
                 , Web.Dom.attribute "width" "100%"
                 , Web.Dom.attribute "height" "100%"
                 ]
                 []
+
+        controlsUi : Web.Dom.Node state_
+        controlsUi =
+            if state.hasGrabbedInThePast then
+                Web.Svg.element "g" [] []
+
+            else
+                Web.Svg.element "g"
+                    []
+                    [ Web.Svg.element "rect"
+                        [ Svg.LocalExtra.fillUniform (Color.rgba 0 0 0 0.5)
+                        , Web.Dom.attribute "height" "10%"
+                        , Web.Dom.attribute "width" "100%"
+                        , Web.Dom.attribute "x" "0%"
+                        , Web.Dom.attribute "y" "0%"
+                        ]
+                        []
+                    , Web.Svg.element "text"
+                        [ Svg.LocalExtra.fillUniform (Color.rgb 0 1 1)
+                        , Web.Dom.style "font-size" "40px"
+                        , Web.Dom.style "font-family" "sans-serif"
+                        , Web.Dom.style "font-weight" "bold"
+                        , Web.Dom.attribute "x" "40%"
+                        , Web.Dom.attribute "y" "6%"
+                        ]
+                        [ Web.Dom.text "hold space to grab"
+                        ]
+                    ]
 
         playerEyeUi location =
             let
@@ -256,24 +441,14 @@ interface state =
                 }
                 [ Svg.LocalExtra.strokeWidth playerArmWidth
                 , Web.Dom.style "stroke-linecap" "round"
-                , Svg.LocalExtra.strokeUniform (Color.rgb 0.5 0.2 0)
+                , Svg.LocalExtra.strokeUniform (Color.rgb 0.38 0.15 0)
                 ]
 
         playerUi : Web.Dom.Node state_
         playerUi =
             Web.Svg.element "g"
                 []
-                [ playerArmUi
-                    (state.playerLocation
-                        |> Point2d.translateBy
-                            (Vector2d.fromMeters { x = -1 + playerArmWidth / 2, y = 0.2 })
-                    )
-                , playerArmUi
-                    (state.playerLocation
-                        |> Point2d.translateBy
-                            (Vector2d.fromMeters { x = 1 - playerArmWidth / 2, y = 0.2 })
-                    )
-                , playerLegUi
+                [ playerLegUi
                     (state.playerLocation
                         |> Point2d.translateBy
                             (Vector2d.fromMeters { x = -0.8 + playerLegWidth / 2, y = -0.5 })
@@ -283,12 +458,22 @@ interface state =
                         |> Point2d.translateBy
                             (Vector2d.fromMeters { x = 0.8 - playerLegWidth / 2, y = -0.5 })
                     )
+                , playerArmUi
+                    (state.playerLocation
+                        |> Point2d.translateBy
+                            (Vector2d.fromMeters { x = -1 + playerArmWidth / 2, y = 0.2 })
+                    )
+                , playerArmUi
+                    (state.playerLocation
+                        |> Point2d.translateBy
+                            (Vector2d.fromMeters { x = 1 - playerArmWidth / 2, y = 0.2 })
+                    )
                 , Svg.LocalExtra.circle
                     { position =
                         state.playerLocation |> Point2d.toRecord Length.inMeters
                     , radius = 1
                     }
-                    [ Svg.LocalExtra.fillUniform (Color.rgb 1 0.5 0)
+                    [ Svg.LocalExtra.fillUniform (Color.rgb 0.7 0.38 0)
                     ]
                 , playerEyeUi
                     (state.playerLocation
@@ -302,27 +487,70 @@ interface state =
                     )
                 ]
 
-        ropeUi : Rope -> Web.Dom.Node state_
-        ropeUi rope =
+        woodImperfectionsUi : Web.Dom.Node state_
+        woodImperfectionsUi =
+            Web.Svg.element "g"
+                []
+                (state.woodImperfections |> List.map coloredCircleUi)
+
+        bushesUi : Web.Dom.Node state_
+        bushesUi =
+            Web.Svg.element "g"
+                []
+                (state.bushes |> List.map coloredCircleUi)
+
+        cloudsUi : Web.Dom.Node state_
+        cloudsUi =
+            Web.Svg.element "g"
+                []
+                (state.clouds |> List.map coloredCircleUi)
+
+        coloredCircleUi : ColoredCircle -> Web.Dom.Node state_
+        coloredCircleUi coloredCircle =
+            Svg.LocalExtra.circle
+                { position = coloredCircle.location |> Point2d.toRecord Length.inMeters
+                , radius = coloredCircle.radius |> Length.inMeters
+                }
+                [ Svg.LocalExtra.fillUniform coloredCircle.color
+                , Web.Dom.attribute "filter" "url(#crumsy)"
+                ]
+
+        mainTreeUi =
+            Svg.LocalExtra.polygon
+                (Polygon2d.singleLoop
+                    (List.map Point2d.fromMeters
+                        [ { y = 100, x = -20 }
+                        , { y = -25, x = -20 }
+                        , { y = -25, x = 20 }
+                        , { y = 100, x = 20 }
+                        ]
+                    )
+                )
+                [ Svg.LocalExtra.fillUniform (Color.rgb 0.2 0.1 0)
+                ]
+
+        vineUi : Vine -> Web.Dom.Node state_
+        vineUi vine =
             Svg.LocalExtra.polyline
-                ((rope.start
-                    :: rope.between
-                    ++ [ rope.end ]
+                ((vine.start
+                    :: vine.between
+                    ++ [ vine.end ]
                  )
                     |> List.map (\node -> node.location |> Point2d.toRecord Length.inMeters)
                 )
                 [ Svg.LocalExtra.strokeWidth 1
                 , Svg.LocalExtra.strokeUniform (Color.rgb 0.41 0.28 0.01)
+                , Svg.LocalExtra.fillUniform (Color.rgba 0 0 0 0.02)
                 , Web.Dom.style "stroke-linejoin" "round"
                 , Web.Dom.style "stroke-linecap" "round"
                 ]
 
-        ropesUi : Web.Dom.Node state_
-        ropesUi =
+        vinesUi : Web.Dom.Node state_
+        vinesUi =
             Web.Svg.element "g"
                 []
-                (state.ropes
-                    |> List.map ropeUi
+                (state.vines
+                    |> List.map vineUi
                 )
       in
       Web.Dom.element "div"
@@ -340,7 +568,8 @@ interface state =
             , Web.Dom.style "display" "block"
             , Web.Dom.style "margin" "auto"
             ]
-            [ worldUi
+            [ svgFilterDefinitions
+            , worldUi
             , Web.Svg.element "g"
                 [ Svg.LocalExtra.scaled
                     { x = worldSize.width / worldSizeCells.x
@@ -370,11 +599,16 @@ interface state =
                                  )
                             }
                         ]
-                        [ ropesUi
+                        [ mainTreeUi
+                        , woodImperfectionsUi
+                        , vinesUi
                         , playerUi
+                        , bushesUi
+                        , cloudsUi
                         ]
                     ]
                 ]
+            , controlsUi
             ]
         ]
         |> Web.Dom.render
@@ -382,7 +616,7 @@ interface state =
         |> Web.interfaceFutureMap
             (\newTime ->
                 if state.playerLocation |> Point2d.yCoordinate |> Quantity.lessThan (Length.meters -25) then
-                    initialState
+                    { initialState | windowSize = state.windowSize }
 
                 else
                     let
@@ -395,27 +629,27 @@ interface state =
                                 Just lastSimulationTime ->
                                     Duration.from lastSimulationTime newTime
 
-                        newRopes : List Rope
-                        newRopes =
-                            state.ropes |> List.map ropeUpdate
+                        newVines : List Vine
+                        newVines =
+                            state.vines |> List.map vineUpdate
 
-                        ropeUpdate : Rope -> Rope
-                        ropeUpdate rope =
+                        vineUpdate : Vine -> Vine
+                        vineUpdate vine =
                             let
                                 newEndVelocity =
                                     let
-                                        connected : RopeNode
+                                        connected : VineNode
                                         connected =
-                                            case List.reverse rope.between of
+                                            case List.reverse vine.between of
                                                 [] ->
-                                                    rope.start
+                                                    vine.start
 
                                                 nextNode :: _ ->
                                                     nextNode
                                     in
-                                    rope.end.velocity
+                                    vine.end.velocity
                                         |> Vector2d.plus
-                                            (accelerationBetweenRopePoints rope.end connected
+                                            (accelerationBetweenVinePoints vine.end connected
                                                 |> Vector2d.for durationToSimulate
                                             )
                                         |> Vector2d.plus
@@ -423,26 +657,26 @@ interface state =
                                         |> Vector2d.scaleBy
                                             (1 - (frictionPercentageEachSecond * (durationToSimulate |> Duration.inSeconds)))
                             in
-                            { start = rope.start
+                            { start = vine.start
                             , between =
-                                rope.between
+                                vine.between
                                     |> listMapWithNeighbors
                                         (\maybePreviousNodeInBetween node maybeNextNodeInBetween ->
                                             let
-                                                previousConnected : RopeNode
+                                                previousConnected : VineNode
                                                 previousConnected =
                                                     case maybePreviousNodeInBetween of
                                                         Nothing ->
-                                                            rope.start
+                                                            vine.start
 
                                                         Just previousNode ->
                                                             previousNode
 
-                                                nextConnected : RopeNode
+                                                nextConnected : VineNode
                                                 nextConnected =
                                                     case maybeNextNodeInBetween of
                                                         Nothing ->
-                                                            rope.end
+                                                            vine.end
 
                                                         Just nextNode ->
                                                             nextNode
@@ -450,11 +684,11 @@ interface state =
                                                 newVelocity =
                                                     node.velocity
                                                         |> Vector2d.plus
-                                                            (accelerationBetweenRopePoints node previousConnected
+                                                            (accelerationBetweenVinePoints node previousConnected
                                                                 |> Vector2d.for durationToSimulate
                                                             )
                                                         |> Vector2d.plus
-                                                            (accelerationBetweenRopePoints node nextConnected
+                                                            (accelerationBetweenVinePoints node nextConnected
                                                                 |> Vector2d.for durationToSimulate
                                                             )
                                                         |> Vector2d.plus
@@ -472,11 +706,11 @@ interface state =
                                         )
                             , end =
                                 { location =
-                                    rope.end.location
+                                    vine.end.location
                                         |> Point2d.translateBy
                                             (newEndVelocity |> Vector2d.for durationToSimulate)
                                 , velocity = newEndVelocity
-                                , mass = rope.end.mass
+                                , mass = vine.end.mass
                                 }
                             }
                     in
@@ -499,21 +733,21 @@ interface state =
                                 | lastSimulationTime = Just newTime
                                 , playerLocation = newPlayerLocation
                                 , playerVelocity = newPlayerVelocity
-                                , ropes = newRopes
+                                , vines = newVines
                             }
 
                         Just playerGrabNodeIndex ->
                             { state
                                 | lastSimulationTime = Just newTime
                                 , playerLocation =
-                                    case newRopes |> ropeNodeAtIndex playerGrabNodeIndex of
+                                    case newVines |> vineNodeAtIndex playerGrabNodeIndex of
                                         Just grabbedNode ->
                                             grabbedNode.location
 
                                         -- should not happen
                                         Nothing ->
                                             state.playerLocation
-                                , ropes = newRopes
+                                , vines = newVines
                             }
             )
     , case state.playerGrabbed of
@@ -535,7 +769,7 @@ interface state =
                                 state
 
                             Ok key ->
-                                if grabActionKeyboardKeys |> Set.member key then
+                                if grabActionKeyboardKey == key then
                                     grab state
 
                                 else
@@ -562,10 +796,10 @@ interface state =
                             Ok key ->
                                 let
                                     maybeGrabbedNode =
-                                        state.ropes
-                                            |> ropeNodeAtIndex playerGrab
+                                        state.vines
+                                            |> vineNodeAtIndex playerGrab
                                 in
-                                if grabActionKeyboardKeys |> Set.member key then
+                                if grabActionKeyboardKey == key then
                                     { state
                                         | playerGrabbed = Nothing
                                         , playerVelocity =
@@ -577,12 +811,12 @@ interface state =
                                                 -- should not happen
                                                 Nothing ->
                                                     state.playerVelocity
-                                        , ropes =
-                                            state.ropes
-                                                |> ropeNodeAtIndexAlter playerGrab
+                                        , vines =
+                                            state.vines
+                                                |> vineNodeAtIndexAlter playerGrab
                                                     (\releasedNode ->
                                                         { releasedNode
-                                                            | mass = ropeNodeMass
+                                                            | mass = vineNodeMass
                                                         }
                                                     )
                                     }
@@ -594,52 +828,78 @@ interface state =
         |> Web.interfaceBatch
 
 
+svgFilterDefinitions =
+    Web.Dom.element "defs"
+        []
+        [ Web.Dom.element "filter"
+            [ Web.Dom.attribute "id" "crumsy" ]
+            [ Web.Dom.element "feTurbulence"
+                [ Web.Dom.attribute "type" "turbulence"
+                , Web.Dom.attribute "baseFrequency" "0.012 0.02"
+                , Web.Dom.attribute "numOctaves" "2"
+                , Web.Dom.attribute "result" "turbulence"
+                , Web.Dom.attribute "seed" "1"
+                , Web.Dom.attribute "stitchTiles" "stitch"
+                ]
+                []
+            , Web.Dom.element "feDisplacementMap"
+                [ Web.Dom.attribute "in" "SourceGraphic"
+                , Web.Dom.attribute "in2" "turbulence"
+                , Web.Dom.attribute "scale" "50"
+                , Web.Dom.attribute "xChannelSelector" "R"
+                , Web.Dom.attribute "yChannelSelector" "G"
+                ]
+                []
+            ]
+        ]
+
+
 releaseBoost : Vector2d (Quantity.Rate Length.Meters Duration.Seconds) Float
 releaseBoost =
-    Vector2d.fromMeters { x = 0, y = 25 }
+    Vector2d.fromMeters { x = 0, y = 22 }
         |> Vector2d.per Duration.second
 
 
-ropeNodeAtIndex :
-    { ropeIndex : Int, ropeNodeIndex : RopeNodeIndex }
-    -> List Rope
-    -> Maybe RopeNode
-ropeNodeAtIndex ropeNodeIndex ropes =
-    ropes
-        |> listElementAtIndex ropeNodeIndex.ropeIndex
+vineNodeAtIndex :
+    { vineIndex : Int, vineNodeIndex : VineNodeIndex }
+    -> List Vine
+    -> Maybe VineNode
+vineNodeAtIndex vineNodeIndex vines =
+    vines
+        |> listElementAtIndex vineNodeIndex.vineIndex
         |> Maybe.andThen
-            (\grabbedRope ->
-                case ropeNodeIndex.ropeNodeIndex of
-                    RopeEnd ->
-                        Just grabbedRope.end
+            (\grabbedVine ->
+                case vineNodeIndex.vineNodeIndex of
+                    VineEnd ->
+                        Just grabbedVine.end
 
-                    RopeBetweenIndex ropeBetweenNodeIndex ->
-                        grabbedRope.between
-                            |> listElementAtIndex ropeBetweenNodeIndex
+                    VineBetweenIndex vineBetweenNodeIndex ->
+                        grabbedVine.between
+                            |> listElementAtIndex vineBetweenNodeIndex
             )
 
 
-ropeNodeAtIndexAlter :
-    { ropeIndex : Int, ropeNodeIndex : RopeNodeIndex }
-    -> (RopeNode -> RopeNode)
-    -> List Rope
-    -> List Rope
-ropeNodeAtIndexAlter ropeNodeIndex ropeNodeChange ropes =
-    ropes
-        |> listElementAtIndexAlter ropeNodeIndex.ropeIndex
-            (\grabbedRope ->
-                case ropeNodeIndex.ropeNodeIndex of
-                    RopeEnd ->
-                        { grabbedRope
-                            | end = grabbedRope.end |> ropeNodeChange
+vineNodeAtIndexAlter :
+    { vineIndex : Int, vineNodeIndex : VineNodeIndex }
+    -> (VineNode -> VineNode)
+    -> List Vine
+    -> List Vine
+vineNodeAtIndexAlter vineNodeIndex vineNodeChange vines =
+    vines
+        |> listElementAtIndexAlter vineNodeIndex.vineIndex
+            (\grabbedVine ->
+                case vineNodeIndex.vineNodeIndex of
+                    VineEnd ->
+                        { grabbedVine
+                            | end = grabbedVine.end |> vineNodeChange
                         }
 
-                    RopeBetweenIndex ropeBetweenNodeIndex ->
-                        { grabbedRope
+                    VineBetweenIndex vineBetweenNodeIndex ->
+                        { grabbedVine
                             | between =
-                                grabbedRope.between
-                                    |> listElementAtIndexAlter ropeBetweenNodeIndex
-                                        ropeNodeChange
+                                grabbedVine.between
+                                    |> listElementAtIndexAlter vineBetweenNodeIndex
+                                        vineNodeChange
                         }
             )
 
@@ -652,25 +912,25 @@ grab state =
             LineSegment2d.from state.playerLocation nodeLocation
                 |> LineSegment2d.length
 
-        closestRopeNode : Maybe { distance : Quantity Float Length.Meters, ropeIndex : Int, ropeNodeIndex : RopeNodeIndex }
-        closestRopeNode =
-            state.ropes
+        closestVineNode : Maybe { distance : Quantity Float Length.Meters, vineIndex : Int, vineNodeIndex : VineNodeIndex }
+        closestVineNode =
+            state.vines
                 |> List.indexedMap
-                    (\ropeIndex rope ->
+                    (\vineIndex vine ->
                         let
                             betweenNodeInfos =
-                                rope.between
+                                vine.between
                                     |> List.indexedMap
                                         (\betweenIndex betweenNode ->
                                             { distance = distanceToPlayer betweenNode.location
-                                            , ropeIndex = ropeIndex
-                                            , ropeNodeIndex = RopeBetweenIndex betweenIndex
+                                            , vineIndex = vineIndex
+                                            , vineNodeIndex = VineBetweenIndex betweenIndex
                                             }
                                         )
                         in
-                        { distance = distanceToPlayer rope.end.location
-                        , ropeIndex = ropeIndex
-                        , ropeNodeIndex = RopeEnd
+                        { distance = distanceToPlayer vine.end.location
+                        , vineIndex = vineIndex
+                        , vineNodeIndex = VineEnd
                         }
                             :: betweenNodeInfos
                     )
@@ -684,8 +944,8 @@ grab state =
                             b
                     )
 
-        maybeClosestGrabbableRopeNode =
-            closestRopeNode
+        maybeClosestGrabbableVineNode =
+            closestVineNode
                 |> Maybe.andThen
                     (\closest ->
                         if closest.distance |> Quantity.greaterThanOrEqualTo playerReachLength then
@@ -693,34 +953,35 @@ grab state =
 
                         else
                             Just
-                                { ropeIndex = closest.ropeIndex
-                                , ropeNodeIndex = closest.ropeNodeIndex
+                                { vineIndex = closest.vineIndex
+                                , vineNodeIndex = closest.vineNodeIndex
                                 }
                     )
     in
-    case maybeClosestGrabbableRopeNode of
+    case maybeClosestGrabbableVineNode of
         Nothing ->
             state
 
-        Just closestGrabbableRopeNode ->
+        Just closestGrabbableVineNode ->
             { state
-                | playerGrabbed = Just closestGrabbableRopeNode
-                , ropes =
-                    state.ropes
-                        |> ropeNodeAtIndexAlter closestGrabbableRopeNode
+                | playerGrabbed = Just closestGrabbableVineNode
+                , vines =
+                    state.vines
+                        |> vineNodeAtIndexAlter closestGrabbableVineNode
                             (\node ->
                                 { location = state.playerLocation
                                 , velocity =
                                     node.velocity
                                         |> Vector2d.plus
                                             state.playerVelocity
-                                , mass = ropeNodeMass |> Quantity.plus playerMass
+                                , mass = vineNodeMass |> Quantity.plus playerMass
                                 }
                             )
+                , hasGrabbedInThePast = True
             }
 
 
-ropeNodeMass =
+vineNodeMass =
     Mass.kilograms 1
 
 
@@ -748,9 +1009,9 @@ listFindBy chooseTheBetter list =
                 |> Just
 
 
-type RopeNodeIndex
-    = RopeBetweenIndex Int
-    | RopeEnd
+type VineNodeIndex
+    = VineBetweenIndex Int
+    | VineEnd
 
 
 frictionPercentageEachSecond : Float
@@ -758,31 +1019,30 @@ frictionPercentageEachSecond =
     0.7
 
 
-ropeElasticity : Float
-ropeElasticity =
+vineElasticity : Float
+vineElasticity =
     1000
 
 
-preferredRopeSegmentLength : Quantity Float Length.Meters
-preferredRopeSegmentLength =
+preferredVineSegmentLength : Quantity Float Length.Meters
+preferredVineSegmentLength =
     Length.meters 1
 
 
-accelerationBetweenRopePoints :
-    RopeNode
-    -> RopeNode
+accelerationBetweenVinePoints :
+    VineNode
+    -> VineNode
     -> Vector2d (Quantity.Rate (Quantity.Rate Length.Meters Duration.Seconds) Duration.Seconds) Float
-accelerationBetweenRopePoints from to =
-    -- TODO take masses into account
+accelerationBetweenVinePoints from to =
     let
         lineSegment : LineSegment2d Length.Meters Float
         lineSegment =
             LineSegment2d.from from.location to.location
     in
     Vector2d.withLength
-        (Quantity.multiplyBy ropeElasticity
+        (Quantity.multiplyBy vineElasticity
             ((lineSegment |> LineSegment2d.length)
-                |> Quantity.minus preferredRopeSegmentLength
+                |> Quantity.minus preferredVineSegmentLength
             )
         )
         (lineSegment |> LineSegment2d.direction |> Maybe.withDefault Direction2d.positiveY)
@@ -791,18 +1051,208 @@ accelerationBetweenRopePoints from to =
         |> Vector2d.scaleBy (1 / (from.mass |> Mass.inKilograms))
 
 
-ropeRandomGenerator : Random.Pcg.Extended.Generator Rope
-ropeRandomGenerator =
-    let
-        nodeCount : Int
-        nodeCount =
-            9
-    in
+bushTranslateBy offset bush =
+    coloredCirclesTranslateBy offset bush
+
+
+cloudTranslateBy offset cloud =
+    coloredCirclesTranslateBy offset cloud
+
+
+coloredCirclesTranslateBy offset bush =
+    bush
+        |> List.map
+            (\coloredCircle ->
+                { coloredCircle
+                    | location = coloredCircle.location |> Point2d.translateBy offset
+                }
+            )
+
+
+woodImperfectionsRandomGenerator : Random.Pcg.Extended.Generator (List ColoredCircle)
+woodImperfectionsRandomGenerator =
+    Random.Pcg.Extended.andThen
+        (\circleCount ->
+            Random.Pcg.Extended.list circleCount woodImperfectionRandomGenerator
+        )
+        (Random.Pcg.Extended.int 12 18)
+
+
+woodImperfectionRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
+woodImperfectionRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\radius color locationRadius locationAngle ->
+            { location =
+                Point2d.origin
+                    |> Point2d.translateBy
+                        (Vector2d.withLength locationRadius (Direction2d.fromAngle locationAngle))
+            , radius = radius
+            , color = color
+            }
+        )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 0.3 5)
+            )
+        |> Random.Pcg.Extended.andMap woodImperfectionColorRandomGenerator
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 16 19)
+            )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Angle.turns
+                (Random.Pcg.Extended.float 0 1)
+            )
+
+
+woodImperfectionColorRandomGenerator : Random.Pcg.Extended.Generator Color
+woodImperfectionColorRandomGenerator =
+    Random.Pcg.Extended.constant (\r g -> Color.rgba r g 0 0.2)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.3 0.55)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.2 0.25)
+
+
+backgroundBushRandomGenerator : Random.Pcg.Extended.Generator (List ColoredCircle)
+backgroundBushRandomGenerator =
+    Random.Pcg.Extended.andThen
+        (\circleCount ->
+            Random.Pcg.Extended.list circleCount backgroundBushCircleRandomGenerator
+        )
+        (Random.Pcg.Extended.int 12 18)
+
+
+backgroundBushCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
+backgroundBushCircleRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\radius color locationRadius locationAngle ->
+            { location =
+                Point2d.origin
+                    |> Point2d.translateBy
+                        (Vector2d.withLength locationRadius (Direction2d.fromAngle locationAngle))
+            , radius = radius
+            , color = color
+            }
+        )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 0.3 5)
+            )
+        |> Random.Pcg.Extended.andMap backgroundBushCircleColorRandomGenerator
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 17 26)
+            )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Angle.turns
+                (Random.Pcg.Extended.float 0 1)
+            )
+
+
+backgroundBushCircleColorRandomGenerator : Random.Pcg.Extended.Generator Color
+backgroundBushCircleColorRandomGenerator =
+    Random.Pcg.Extended.constant (\r g b -> Color.rgba r g b 0.2)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.15)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.4 0.9)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.3)
+
+
+bushRandomGenerator : Random.Pcg.Extended.Generator (List ColoredCircle)
+bushRandomGenerator =
+    Random.Pcg.Extended.andThen
+        (\circleCount ->
+            Random.Pcg.Extended.list circleCount bushCircleRandomGenerator
+        )
+        (Random.Pcg.Extended.int 20 38)
+
+
+bushCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
+bushCircleRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\radius color locationRadius locationAngle ->
+            { location =
+                Point2d.origin
+                    |> Point2d.translateBy
+                        (Vector2d.withLength locationRadius (Direction2d.fromAngle locationAngle))
+                    |> Point2d.translateBy (Vector2d.fromMeters { x = -(locationRadius |> Length.inMeters), y = -2 * (locationRadius |> Length.inMeters) })
+            , radius = radius
+            , color = color
+            }
+        )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 0.8 1.8)
+            )
+        |> Random.Pcg.Extended.andMap bushCircleColorRandomGenerator
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 0 3.9)
+            )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Angle.turns
+                (Random.Pcg.Extended.float -0.1 0.6)
+            )
+
+
+bushCircleColorRandomGenerator : Random.Pcg.Extended.Generator Color
+bushCircleColorRandomGenerator =
+    Random.Pcg.Extended.constant (\r g b -> Color.rgba r g b 0.7)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.15)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.33 0.4)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.3)
+
+
+cloudRandomGenerator : Random.Pcg.Extended.Generator (List ColoredCircle)
+cloudRandomGenerator =
+    Random.Pcg.Extended.andThen
+        (\circleCount ->
+            Random.Pcg.Extended.list circleCount cloudCircleRandomGenerator
+        )
+        (Random.Pcg.Extended.int 11 15)
+
+
+cloudCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
+cloudCircleRandomGenerator =
+    Random.Pcg.Extended.constant
+        (\radius color locationRadius locationAngle ->
+            { location =
+                Point2d.origin
+                    |> Point2d.translateBy
+                        (Vector2d.withLength locationRadius (Direction2d.fromAngle locationAngle))
+                    |> Point2d.translateBy (Vector2d.fromMeters { x = -(locationRadius |> Length.inMeters), y = -2 * (locationRadius |> Length.inMeters) })
+            , radius = radius
+            , color = color
+            }
+        )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 1.8 3.1)
+            )
+        |> Random.Pcg.Extended.andMap cloudCircleColorRandomGenerator
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Length.meters
+                (Random.Pcg.Extended.float 0 5.9)
+            )
+        |> Random.Pcg.Extended.andMap
+            (Random.Pcg.Extended.map Angle.turns
+                (Random.Pcg.Extended.float -0.14 0.64)
+            )
+
+
+cloudCircleColorRandomGenerator : Random.Pcg.Extended.Generator Color
+cloudCircleColorRandomGenerator =
+    Random.Pcg.Extended.constant (\r g b -> Color.rgba r g b 0.05)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.8 0.9)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.8 0.9)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.9 1)
+
+
+vineRandomGenerator : Int -> Random.Pcg.Extended.Generator Vine
+vineRandomGenerator nodeCount =
     Random.Pcg.Extended.constant
         (\startOffset between endOffset ->
             { start =
                 { velocity = Vector2d.zero
-                , mass = ropeNodeMass
+                , mass = vineNodeMass
                 , location =
                     Point2d.fromMeters { x = 0, y = 0 }
                         |> Point2d.translateBy endOffset
@@ -810,14 +1260,14 @@ ropeRandomGenerator =
             , between = between
             , end =
                 { velocity = Vector2d.zero
-                , mass = ropeNodeMass
+                , mass = vineNodeMass
                 , location =
                     Point2d.fromMeters { x = 0, y = -(nodeCount |> Basics.toFloat) * 0.8 }
                         |> Point2d.translateBy endOffset
                 }
             }
         )
-        |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+        |> Random.Pcg.Extended.andMap vineNodeLocationVariation
         |> Random.Pcg.Extended.andMap
             (List.range 1 (nodeCount - 1)
                 |> List.map
@@ -825,17 +1275,17 @@ ropeRandomGenerator =
                         Random.Pcg.Extended.constant
                             (\offset ->
                                 { velocity = Vector2d.zero
-                                , mass = ropeNodeMass
+                                , mass = vineNodeMass
                                 , location =
                                     Point2d.fromMeters { x = 0, y = -(i |> Basics.toFloat) * 0.8 }
                                         |> Point2d.translateBy offset
                                 }
                             )
-                            |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+                            |> Random.Pcg.Extended.andMap vineNodeLocationVariation
                     )
                 |> randomPcgExtendedListAll
             )
-        |> Random.Pcg.Extended.andMap ropeNodeLocationVariation
+        |> Random.Pcg.Extended.andMap vineNodeLocationVariation
 
 
 randomPcgExtendedListAll generators =
@@ -849,31 +1299,31 @@ randomPcgExtendedListAll generators =
                 (randomPcgExtendedListAll tailGenerators)
 
 
-ropeNodeLocationVariation =
+vineNodeLocationVariation =
     Random.Pcg.Extended.constant
         (\xOffset yOffset -> Vector2d.fromMeters { x = xOffset, y = yOffset })
         |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float -0.08 0.08)
         |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float -0.05 0.05)
 
 
-ropeTranslateBy : Vector2d Length.Meters Float -> Rope -> Rope
-ropeTranslateBy offset rope =
-    { start = rope.start |> ropeNodeTranslateBy offset
+vineTranslateBy : Vector2d Length.Meters Float -> Vine -> Vine
+vineTranslateBy offset vine =
+    { start = vine.start |> vineNodeTranslateBy offset
     , between =
-        rope.between
+        vine.between
             |> List.map
                 (\node ->
-                    node |> ropeNodeTranslateBy offset
+                    node |> vineNodeTranslateBy offset
                 )
-    , end = rope.end |> ropeNodeTranslateBy offset
+    , end = vine.end |> vineNodeTranslateBy offset
     }
 
 
-ropeNodeTranslateBy : Vector2d Length.Meters Float -> RopeNode -> RopeNode
-ropeNodeTranslateBy offset ropeNode =
-    { location = ropeNode.location |> Point2d.translateBy offset
-    , velocity = ropeNode.velocity
-    , mass = ropeNode.mass
+vineNodeTranslateBy : Vector2d Length.Meters Float -> VineNode -> VineNode
+vineNodeTranslateBy offset vineNode =
+    { location = vineNode.location |> Point2d.translateBy offset
+    , velocity = vineNode.velocity
+    , mass = vineNode.mass
     }
 
 
@@ -885,13 +1335,9 @@ gravity =
         |> Vector2d.per Duration.second
 
 
-grabActionKeyboardKeys : Set String
-grabActionKeyboardKeys =
-    Set.fromList
-        [ "w"
-        , "ArrowUp"
-        , " "
-        ]
+grabActionKeyboardKey : String
+grabActionKeyboardKey =
+    " "
 
 
 worldSizeCells : { x : Float, y : Float }

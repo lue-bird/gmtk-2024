@@ -1,5 +1,5 @@
-## scaveling
-> scale the cave, swinging across ropes
+## tree scaler
+> scale the tree, swinging from vine to vine
 
 
 
