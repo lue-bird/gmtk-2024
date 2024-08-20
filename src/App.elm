@@ -174,10 +174,6 @@ interface state =
                     (\loadResult ->
                         case loadResult of
                             Ok musicSource ->
-                                let
-                                    _ =
-                                        Debug.todo ""
-                                in
                                 { state | music = Just musicSource }
 
                             Err error ->
@@ -1052,7 +1048,7 @@ vineNodeMass =
 
 
 playerMass =
-    Mass.kilograms 4.2
+    Mass.kilograms 8.2
 
 
 playerReachLength : Quantity Float Length.Meters
@@ -1082,7 +1078,7 @@ type VineNodeIndex
 
 frictionPercentageEachSecond : Float
 frictionPercentageEachSecond =
-    0.7
+    0.6
 
 
 capLengthAt maximumLength vector =
@@ -1096,7 +1092,7 @@ capLengthAt maximumLength vector =
 
 vineElasticity : Float
 vineElasticity =
-    860
+    600
 
 
 preferredVineSegmentLength : Quantity Float Length.Meters
