@@ -17,6 +17,7 @@ import Svg.LocalExtra
 import Time
 import Vector2d exposing (Vector2d)
 import Web
+import Web.Audio
 import Web.Dom
 import Web.Random
 import Web.Svg
@@ -39,6 +40,8 @@ type alias State =
     , bushes : List ColoredCircle
     , clouds : List ColoredCircle
     , woodImperfections : List ColoredCircle
+    , startTime : Maybe Time.Posix
+    , music : Maybe Web.AudioSource
     , hasGrabbedInThePast : Bool
     }
 
@@ -72,6 +75,10 @@ app =
 
 initialState : State
 initialState =
+    playingState
+
+
+playingState =
     { windowSize = { width = 1920, height = 1080 }
     , randomness = Nothing
     , lastSimulationTime = Nothing
@@ -84,6 +91,8 @@ initialState =
     , bushes = []
     , clouds = []
     , woodImperfections = []
+    , music = Nothing
+    , startTime = Nothing
     , hasGrabbedInThePast = False
     }
 
@@ -142,6 +151,30 @@ interface state =
     [ [ Web.Window.sizeRequest, Web.Window.resizeListen ]
         |> Web.interfaceBatch
         |> Web.interfaceFutureMap (\size -> { state | windowSize = size })
+    , Web.Time.posixRequest
+        |> Web.interfaceFutureMap
+            (\startTime -> { state | startTime = Just startTime })
+    , case state.music of
+        Nothing ->
+            Web.Audio.sourceLoad "tarzan-by-iqui.mp3"
+                |> Web.interfaceFutureMap
+                    (\loadResult ->
+                        case loadResult of
+                            Ok musicSource ->
+                                { state | music = Just musicSource }
+
+                            Err _ ->
+                                state
+                    )
+
+        Just musicSource ->
+            case state.startTime of
+                Nothing ->
+                    Web.interfaceNone
+
+                Just startTime ->
+                    Web.Audio.fromSource musicSource startTime
+                        |> Web.Audio.play
     , case state.randomness of
         Just _ ->
             Web.interfaceNone
@@ -206,7 +239,7 @@ interface state =
                                                                     |> Random.Pcg.Extended.map
                                                                         (bushTranslateBy
                                                                             (Vector2d.fromMeters
-                                                                                { x = 0, y = 5 + (i |> Basics.toFloat) * 20 }
+                                                                                { x = 0, y = (i |> Basics.toFloat) * 20 }
                                                                             )
                                                                         )
                                                             )
@@ -227,30 +260,38 @@ interface state =
                                                         |> randomPcgExtendedListAll
                                                     )
                                                 |> Random.Pcg.Extended.andMap
-                                                    (List.range 0 13
+                                                    (List.range 0 9
                                                         |> List.map
                                                             (\i ->
-                                                                cloudRandomGenerator
-                                                                    |> Random.Pcg.Extended.map
-                                                                        (bushTranslateBy
-                                                                            (Vector2d.fromMeters
-                                                                                { x = -35, y = 12 + (i |> Basics.toFloat) * 14 }
-                                                                            )
-                                                                        )
+                                                                Random.Pcg.Extended.constant
+                                                                    (\cloud x ->
+                                                                        cloud
+                                                                            |> coloredCirclesTranslateBy
+                                                                                (Vector2d.fromMeters
+                                                                                    { x = x, y = 12 + (i |> Basics.toFloat) * 18 }
+                                                                                )
+                                                                    )
+                                                                    |> Random.Pcg.Extended.andMap cloudRandomGenerator
+                                                                    |> Random.Pcg.Extended.andMap
+                                                                        (Random.Pcg.Extended.float -53 -35)
                                                             )
                                                         |> randomPcgExtendedListAll
                                                     )
                                                 |> Random.Pcg.Extended.andMap
-                                                    (List.range 0 13
+                                                    (List.range 0 9
                                                         |> List.map
                                                             (\i ->
-                                                                cloudRandomGenerator
-                                                                    |> Random.Pcg.Extended.map
-                                                                        (bushTranslateBy
-                                                                            (Vector2d.fromMeters
-                                                                                { x = 35, y = 16 + (i |> Basics.toFloat) * 14 }
-                                                                            )
-                                                                        )
+                                                                Random.Pcg.Extended.constant
+                                                                    (\cloud x ->
+                                                                        cloud
+                                                                            |> coloredCirclesTranslateBy
+                                                                                (Vector2d.fromMeters
+                                                                                    { x = x, y = 12 + (i |> Basics.toFloat) * 18 }
+                                                                                )
+                                                                    )
+                                                                    |> Random.Pcg.Extended.andMap cloudRandomGenerator
+                                                                    |> Random.Pcg.Extended.andMap
+                                                                        (Random.Pcg.Extended.float 35 53)
                                                             )
                                                         |> randomPcgExtendedListAll
                                                     )
@@ -519,14 +560,16 @@ interface state =
             Svg.LocalExtra.polygon
                 (Polygon2d.singleLoop
                     (List.map Point2d.fromMeters
-                        [ { y = 100, x = -20 }
+                        [ { y = 170, x = -20 }
                         , { y = -25, x = -20 }
                         , { y = -25, x = 20 }
-                        , { y = 100, x = 20 }
+                        , { y = 170, x = 20 }
                         ]
                     )
                 )
                 [ Svg.LocalExtra.fillUniform (Color.rgb 0.2 0.1 0)
+                , Svg.LocalExtra.strokeWidth 4
+                , Svg.LocalExtra.strokeUniform (Color.rgb 0.17 0.09 0)
                 ]
 
         vineUi : Vine -> Web.Dom.Node state_
@@ -616,7 +659,10 @@ interface state =
         |> Web.interfaceFutureMap
             (\newTime ->
                 if state.playerLocation |> Point2d.yCoordinate |> Quantity.lessThan (Length.meters -25) then
-                    { initialState | windowSize = state.windowSize }
+                    { playingState
+                        | windowSize = state.windowSize
+                        , music = state.music
+                    }
 
                 else
                     let
@@ -991,7 +1037,7 @@ playerMass =
 
 playerReachLength : Quantity Float Length.Meters
 playerReachLength =
-    Length.meters 4.2
+    Length.meters 4.5
 
 
 listFindBy chooseTheBetter list =
@@ -1075,7 +1121,7 @@ woodImperfectionsRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount woodImperfectionRandomGenerator
         )
-        (Random.Pcg.Extended.int 12 18)
+        (Random.Pcg.Extended.int 10 15)
 
 
 woodImperfectionRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
@@ -1092,7 +1138,7 @@ woodImperfectionRandomGenerator =
         )
         |> Random.Pcg.Extended.andMap
             (Random.Pcg.Extended.map Length.meters
-                (Random.Pcg.Extended.float 0.3 5)
+                (Random.Pcg.Extended.float 0.3 2)
             )
         |> Random.Pcg.Extended.andMap woodImperfectionColorRandomGenerator
         |> Random.Pcg.Extended.andMap
@@ -1118,7 +1164,7 @@ backgroundBushRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount backgroundBushCircleRandomGenerator
         )
-        (Random.Pcg.Extended.int 12 18)
+        (Random.Pcg.Extended.int 11 15)
 
 
 backgroundBushCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
@@ -1135,7 +1181,7 @@ backgroundBushCircleRandomGenerator =
         )
         |> Random.Pcg.Extended.andMap
             (Random.Pcg.Extended.map Length.meters
-                (Random.Pcg.Extended.float 0.3 5)
+                (Random.Pcg.Extended.float 0.3 7)
             )
         |> Random.Pcg.Extended.andMap backgroundBushCircleColorRandomGenerator
         |> Random.Pcg.Extended.andMap
@@ -1150,9 +1196,9 @@ backgroundBushCircleRandomGenerator =
 
 backgroundBushCircleColorRandomGenerator : Random.Pcg.Extended.Generator Color
 backgroundBushCircleColorRandomGenerator =
-    Random.Pcg.Extended.constant (\r g b -> Color.rgba r g b 0.2)
+    Random.Pcg.Extended.constant (\r g b -> Color.rgba r g b 0.27)
         |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.15)
-        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.4 0.9)
+        |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0.4 0.6)
         |> Random.Pcg.Extended.andMap (Random.Pcg.Extended.float 0 0.3)
 
 
@@ -1162,7 +1208,7 @@ bushRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount bushCircleRandomGenerator
         )
-        (Random.Pcg.Extended.int 20 38)
+        (Random.Pcg.Extended.int 18 28)
 
 
 bushCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
@@ -1180,7 +1226,7 @@ bushCircleRandomGenerator =
         )
         |> Random.Pcg.Extended.andMap
             (Random.Pcg.Extended.map Length.meters
-                (Random.Pcg.Extended.float 0.8 1.8)
+                (Random.Pcg.Extended.float 1 1.9)
             )
         |> Random.Pcg.Extended.andMap bushCircleColorRandomGenerator
         |> Random.Pcg.Extended.andMap
@@ -1207,7 +1253,7 @@ cloudRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount cloudCircleRandomGenerator
         )
-        (Random.Pcg.Extended.int 11 15)
+        (Random.Pcg.Extended.int 9 13)
 
 
 cloudCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
@@ -1225,7 +1271,7 @@ cloudCircleRandomGenerator =
         )
         |> Random.Pcg.Extended.andMap
             (Random.Pcg.Extended.map Length.meters
-                (Random.Pcg.Extended.float 1.8 3.1)
+                (Random.Pcg.Extended.float 2.3 3.5)
             )
         |> Random.Pcg.Extended.andMap cloudCircleColorRandomGenerator
         |> Random.Pcg.Extended.andMap
