@@ -1082,7 +1082,7 @@ type VineNodeIndex
 
 frictionPercentageEachSecond : Float
 frictionPercentageEachSecond =
-    0.9
+    0.7
 
 
 capLengthAt maximumLength vector =
@@ -1096,7 +1096,7 @@ capLengthAt maximumLength vector =
 
 vineElasticity : Float
 vineElasticity =
-    1000
+    860
 
 
 preferredVineSegmentLength : Quantity Float Length.Meters
