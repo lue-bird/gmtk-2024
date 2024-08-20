@@ -43,6 +43,7 @@ type alias State =
     , startTime : Maybe Time.Posix
     , music : Maybe Web.AudioSource
     , hasGrabbedInThePast : Bool
+    , userHasInteracted : Bool
     }
 
 
@@ -75,10 +76,6 @@ app =
 
 initialState : State
 initialState =
-    playingState
-
-
-playingState =
     { windowSize = { width = 1920, height = 1080 }
     , randomness = Nothing
     , lastSimulationTime = Nothing
@@ -94,6 +91,7 @@ playingState =
     , music = Nothing
     , startTime = Nothing
     , hasGrabbedInThePast = False
+    , userHasInteracted = False
     }
 
 
@@ -163,7 +161,7 @@ interface state =
                             Ok musicSource ->
                                 { state | music = Just musicSource }
 
-                            Err _ ->
+                            Err error ->
                                 state
                     )
 
@@ -210,7 +208,7 @@ interface state =
                                                 |> Random.Pcg.Extended.andMap mediumVineRandomGenerator
                                                 |> Random.Pcg.Extended.andMap longVineFromBushRandomGenerator
                                                 |> Random.Pcg.Extended.andMap
-                                                    (List.range 0 9
+                                                    (List.range 0 14
                                                         |> List.map
                                                             (\i ->
                                                                 Random.Pcg.Extended.constant
@@ -659,9 +657,10 @@ interface state =
         |> Web.interfaceFutureMap
             (\newTime ->
                 if state.playerLocation |> Point2d.yCoordinate |> Quantity.lessThan (Length.meters -25) then
-                    { playingState
+                    { initialState
                         | windowSize = state.windowSize
                         , music = state.music
+                        , userHasInteracted = state.userHasInteracted
                     }
 
                 else
