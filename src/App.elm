@@ -227,12 +227,12 @@ interface state =
                                                 |> Random.Pcg.Extended.andMap mediumVineRandomGenerator
                                                 |> Random.Pcg.Extended.andMap longVineFromBushRandomGenerator
                                                 |> Random.Pcg.Extended.andMap
-                                                    (List.range 0 14
+                                                    (List.range 0 13
                                                         |> List.map
                                                             (\i ->
                                                                 Random.Pcg.Extended.constant
-                                                                    (\bush x ->
-                                                                        bush
+                                                                    (\vineAndBush x ->
+                                                                        vineAndBush
                                                                             |> vineAndBushesTranslateBy
                                                                                 (Vector2d.fromMeters
                                                                                     { x = x, y = 5 + (i |> Basics.toFloat) * 10 }
@@ -628,8 +628,8 @@ interface state =
             , Web.Dom.style "display" "block"
             , Web.Dom.style "margin" "auto"
             ]
-            [ svgFilterDefinitions
-            , worldUi
+            [ -- svgFilterDefinitions
+              worldUi
             , Web.Svg.element "g"
                 [ Svg.LocalExtra.scaled
                     { x = worldSize.width / worldSizeCells.x
@@ -1237,7 +1237,7 @@ bushRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount bushCircleRandomGenerator
         )
-        (Random.Pcg.Extended.int 18 28)
+        (Random.Pcg.Extended.int 18 24)
 
 
 bushCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
@@ -1282,7 +1282,7 @@ cloudRandomGenerator =
         (\circleCount ->
             Random.Pcg.Extended.list circleCount cloudCircleRandomGenerator
         )
-        (Random.Pcg.Extended.int 9 13)
+        (Random.Pcg.Extended.int 8 11)
 
 
 cloudCircleRandomGenerator : Random.Pcg.Extended.Generator ColoredCircle
