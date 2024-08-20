@@ -3,5 +3,5 @@ import elm from 'vite-plugin-elm-watch'
 
 export default defineConfig({
     plugins: [elm()],
-    base: "https://lue-bird.github.io/gmtk-2024",
+    base: "",
 })
